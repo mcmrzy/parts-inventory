@@ -1041,6 +1041,7 @@ function addOpCards(ops) {
     else if (op.op === 'clear_all') { label = '✔ 已清空全部'; sub = `共移除 ${op.cleared} 种物料`; }
     else if (op.op === 'update') { label = '✔ 已更新物料'; sub = `${op.title}${op.changed ? ' · 改动：' + op.changed : ''}`; }
     else if (op.op === 'backfill') { label = '✔ 已从立创补全资料'; sub = `${op.title} · 补充 ${op.filled || 0} 项${op.fields ? '（' + op.fields + '）' : ''}`; }
+    else if (op.op === 'bulk') { label = '✔ 批量入库完成'; sub = `新建 ${op.created} · 加库存 ${op.added}${op.failedCount ? ' · 失败 ' + op.failedCount : ''}`; }
     else { label = '✔ 完成'; sub = op.title || ''; }
     card.appendChild(el('span', 'lbl', label + '：'));
     card.appendChild(el('span', null, sub));

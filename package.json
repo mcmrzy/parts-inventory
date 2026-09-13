@@ -1,0 +1,19 @@
+{
+  "name": "parts-inventory",
+  "version": "1.0.0",
+  "description": "物料库存管理系统：AI录入/拍照识别/库存增减/立创商城对接",
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node scripts/e2e.mjs"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "multer": "^2.0.1"
+  },
+  "license": "MIT"
+}

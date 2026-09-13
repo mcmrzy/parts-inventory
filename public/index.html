@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#eef4ff" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="物料管家" />
+  <title>物料管家 · 元器件库存</title>
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+  <link rel="apple-touch-icon" href="/icon.svg" />
+  <link rel="stylesheet" href="style.css" />
+  <script src="barcode.js"></script>
+</head>
+<body>
+
+  <!-- ═══ 顶部应用栏 ═══ -->
+  <header class="appbar">
+    <button class="brand" id="brandBtn" title="回到全部物料">
+      <span class="logo">◈</span>
+      <span class="brand-name">物料管家</span>
+      <span class="brand-sub">NEXUS</span>
+    </button>
+    <div class="app-actions">
+      <button class="ibtn" id="btnSettings" title="设置" aria-label="设置">⚙</button>
+      <button class="ibtn" id="btnRefreshPrices" title="批量刷新立创参考价（不影响来料价）" aria-label="批量刷新价格">⟳</button>
+      <button class="ibtn" id="btnExport" title="导出数据" aria-label="导出">⬇</button>
+      <div class="export-menu hidden" id="exportMenu">
+        <a href="/api/export?format=csv">导出 CSV</a>
+        <a href="/api/export?format=json">导出 JSON（含流水）</a>
+        <a href="/api/export/replenish">导出补货清单 CSV</a>
+      </div>
+      <button class="btn primary" id="btnNew">＋ 新增物料</button>
+      <button class="ibtn" id="btnKits" title="清单 / BOM" aria-label="清单">📦</button>
+      <button class="ibtn" id="btnValue" title="库存价值报表" aria-label="库存价值">💰</button>
+    </div>
+  </header>
+
+  <main class="page">
+
+    <!-- ═══ 统计条（可点击筛选） ═══ -->
+    <section class="summary" id="summary" aria-label="库存统计">
+      <button class="sum-card all" data-go="all">
+        <span class="sum-ico ic-blue">🧺</span>
+        <div class="sum-body"><b id="stTotal">–</b><span>物料种类</span></div>
+      </button>
+      <button class="sum-card qty" data-go="all">
+        <span class="sum-ico ic-violet">∑</span>
+        <div class="sum-body"><b id="stQty">–</b><span>库存总数</span></div>
+      </button>
+      <button class="sum-card low" data-go="low">
+        <span class="sum-ico ic-amber">⚠</span>
+        <div class="sum-body"><b id="stLow">–</b><span>库存预警</span></div>
+      </button>
+      <button class="sum-card out" data-go="out">
+        <span class="sum-ico ic-red">✕</span>
+        <div class="sum-body"><b id="stOut">–</b><span>已缺货</span></div>
+      </button>
+    </section>
+
+    <!-- ═══ 筛选区 ═══ -->
+    <section class="controls">
+      <div class="searchbox">
+        <input id="inpSearch" type="search" placeholder="搜索型号 / 名称 / 编号 / 品牌 / 封装 / 位置" autocomplete="off" />
+      </div>
+      <div class="chips-scroll">
+        <div class="seg" id="segStatus">
+          <button class="on" data-status="">全部</button>
+          <button data-status="low">预警</button>
+          <button data-status="out">缺货</button>
+        </div>
+        <div class="cat-chips" id="catChips"></div>
+        <div class="tool-right">
+          <button class="cat-chip" id="btnPaste" title="粘贴立创订单文本，批量核对/建档/入库">📥 粘贴入库</button>
+          <button class="cat-chip" id="btnSyncImg" title="缺图物料自动补图：立创优先，其余按描述找网络相似图">🖼 同步图片</button>
+          <button class="cat-chip" id="btnScan" title="扫条码 / 二维码查料入库">⌗ 扫码</button>
+          <button class="cat-chip" id="btnReplenish" title="缺货与预警物料 + 建议补货量">📋 补货</button>
+          <button class="cat-chip" id="btnDup" title="同编号 / 同型号重复档案检测与合并">🧹 查重</button>
+        </div>
+      </div>
+      <!-- 细化筛选（品牌/封装/位置/规格参数，动态生成） -->
+      <div class="facet-bar hidden" id="facetBar"></div>
+    </section>
+
+    <!-- ═══ 物料卡片流 ═══ -->
+    <div class="feed-head">
+      <span class="feed-title">物料</span>
+      <span id="countHint"></span>
+    </div>
+    <section class="card-feed" id="cardFeed" aria-live="polite"></section>
+
+    <div class="empty hidden" id="emptyState">
+      <div class="empty-ico">🧺</div>
+      <p id="emptyText"></p>
+    </div>
+
+    <footer class="foot">本地数据 · AI 接入 DeepSeek V4</footer>
+  </main>
+
+  <!-- AI 悬浮按钮 -->
+  <button class="fab" id="fabAi" title="打开 AI 助手" aria-label="AI 助手">✦</button>
+
+  <!-- 详情弹窗（居中） -->
+  <div class="mask hidden" id="detailMask"></div>
+  <div class="modal detail-modal hidden" id="detailModal" role="dialog" aria-label="物料详情">
+    <div class="modal-head">
+      <h2 id="dTitle">物料详情</h2>
+      <button class="icon-btn" id="dClose" aria-label="关闭">✕</button>
+    </div>
+    <div class="detail-body" id="dBody"></div>
+  </div>
+
+  <!-- AI 聊天抽屉 -->
+  <div class="mask hidden" id="aiMask"></div>
+  <aside class="drawer ai-drawer hidden" id="aiDrawer" aria-label="AI 助手">
+    <div class="drawer-head">
+      <div class="d-title">✦ AI 物料助手</div>
+      <span class="ai-badge" id="aiBadge">演示模式</span>
+      <button class="icon-btn" id="aiNewChat" title="新对话" aria-label="新对话">＋</button>
+      <button class="icon-btn" id="aiHistoryBtn" title="历史会话" aria-label="历史会话">🕘</button>
+      <button class="icon-btn" id="aiClose" aria-label="关闭">✕</button>
+    </div>
+    <div class="hist-panel hidden" id="histPanel">
+      <div class="hist-head"><span>历史会话</span><button class="mini-link" id="histClose">收起</button></div>
+      <div class="hist-list" id="histList"></div>
+    </div>
+    <div class="ai-hints" id="aiHints">
+      <button data-txt="新增 100 个 10kΩ 0805 电阻 三星">建档</button>
+      <button data-txt="入库 50 个 C1710">入库</button>
+      <button data-txt="清空所有物料">清空</button>
+      <button data-txt="查找 0805">查找</button>
+    </div>
+    <div class="chat-box" id="chatBox">
+      <div class="msg bot">
+        <div class="bubble">你好，我是物料助手 👋<br/>直接说：新增 / 入库 / 出库 / 盘点 / 删除 / 查找。<br/>也可以 📷 拍照，我识别后帮你建档。</div>
+      </div>
+    </div>
+    <div class="chat-input">
+      <div class="attach-row hidden" id="attachRow">
+        <img id="attachPreview" alt="待发送图片" />
+        <span id="attachName"></span>
+        <button id="attachRemove" aria-label="移除图片">✕</button>
+      </div>
+      <div class="input-row">
+        <label class="cam" title="上传 / 拍摄照片" aria-label="拍照">📷<input type="file" id="imgPick" accept="image/*" hidden /></label>
+        <button class="cam" id="btnMic" title="语音输入（Chrome / Edge）" aria-label="语音输入">🎤</button>
+        <textarea id="chatText" rows="1" placeholder="例如：入库 100 个 C1710…"></textarea>
+        <button class="btn primary send" id="btnSend">发送</button>
+      </div>
+    </div>
+  </aside>
+
+  <!-- 通用弹层 -->
+  <div class="modal-mask hidden" id="modalMask">
+    <div class="modal" id="modalBox"></div>
+  </div>
+
+  <!-- 轻提示 -->
+  <div class="toast-wrap" id="toastWrap"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,13 @@
+node_modules/
+data/
+photos/
+out/
+.git
+.mimosa/
+.e2e-*
+.edge*
+.final-data/
+.tok-data*
+.img-t
+*.log
+cn-migrate.mjs

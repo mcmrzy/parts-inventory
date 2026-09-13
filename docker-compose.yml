@@ -1,0 +1,20 @@
+services:
+  parts-inventory:
+    build: .
+    image: parts-inventory:latest
+    container_name: parts-inventory
+    ports:
+      - "7860:7860"
+    environment:
+      - HOST=0.0.0.0
+      - PORT=7860
+      - TZ=Asia/Shanghai
+      # 局域网访问口令（可选）：取消注释并修改后，打开页面会要求输入一次口令
+      # - PI_TOKEN=改成你的口令
+      # 可选：用环境变量注入 AI Key（不写进 data/config.json 时用）
+      # - PI_AI_API_KEY=sk-xxxxxxxx
+    volumes:
+      # 数据与照片持久化在宿主机，重建容器不丢数据
+      - ./data:/app/data
+      - ./photos:/app/photos
+    restart: unless-stopped

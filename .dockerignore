@@ -1,0 +1,11 @@
+node_modules
+data
+photos
+out
+.git
+.mimosa
+*.log
+.e2e-*
+.edge*
+start.bat
+README.md

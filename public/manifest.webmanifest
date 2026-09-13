@@ -1,0 +1,14 @@
+{
+  "name": "物料管家 · 元器件库存",
+  "short_name": "物料管家",
+  "description": "电子元器件物料库存管理：AI 建档、拍照识别、立创编号自动补全",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#eef4ff",
+  "theme_color": "#eef4ff",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

@@ -24,10 +24,10 @@ export const SYSTEM_PROMPT = `你是"物料管家"的 AI 助手，负责管理�
 9. 回复格式：先一句话概括执行结果，再按需给出注意事项或下一步建议。不要输出 JSON，只说自然语言。
 10. 修改/补全已有物料：update_material 可修改任意字段；若物料带有立创编号但缺照片/参数/数据手册/参考价等资料，优先用 lcsc_backfill 自动从立创商城补全——默认只填空缺字段不覆盖已有值，用户明确说"覆盖/重新拉取/刷新价格"时才 overwrite=true。
     价格有两条独立线，绝不能混：price=用户的来料价（用户报多少填多少，通常 CNY）；lcsc_price=立创参考价（来自立创国内站，人民币含税参考价）。任何立创刷新/补全都只写 lcsc_price，永远不改 price；用户说"来料价改成 X"只改 price。补全后提醒用户图片会立即显示在卡片上。
-11. 批量任务（一次建档/操作很多个编号）：
-    - 尽量在一条回复里**并行发起多个工具调用**（一次 tool_calls 携带多个 invoke），减少轮数；
-    - 每批建议 8~15 个，执行完一批就用文字小结进度，并请用户回复"继续"处理下一批；
-    - 严禁把工具调用以任何文本/标记形式写在回复正文里，调用必须走工具通道。`;
+11. 批量任务：用户一次给出多个/大量编号（建档、入库、核对、补图）时：
+    - 核对"在不在库"→ check_codes 一次传全部编号；
+    - 建档/入库 → **bulk_create_items 一次性传完整 items 数组**（支持 ≤200 个），不要分批、不要逐个 create_material、不要输出任何文本清单代替执行；
+    - 执行完把成功/失败明细用表格简洁汇报。`;
 
 // ---------------- 工具定义（OpenAI tools 格式） ----------------
 export const TOOLS = [
@@ -198,6 +198,32 @@ export const TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'bulk_create_items',
+      description: '批量建档/入库（一次最多 200 个）。用户一次给出大量编号+数量时必须用本工具：items 一次性传完整数组，不要分批、不要逐个 create_material。工具内部自动处理：编号已存在→直接加库存并更新来料价；不存在→自动从立创拉资料建档入库。',
+      parameters: {
+        type: 'object',
+        properties: {
+          items: {
+            type: 'array',
+            description: '完整的物料数组，一次传完',
+            items: {
+              type: 'object',
+              properties: {
+                lcsc_code: { type: 'string', description: '立创编号（必需）' },
+                qty: { type: 'integer', description: '入库数量' },
+                price: { type: 'number', description: '用户给的来料价（CNY）；用户没报就省略' }
+              },
+              required: ['lcsc_code', 'qty']
+            }
+          }
+        },
+        required: ['items']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
       name: 'clear_all_materials',
       description: '清空库存：一次性删除（软删除）全部物料档案。危险批量操作：第一轮调用只能返回"待确认"信息，绝不能直接执行；必须先向用户确认，得到用户明确的"确认清空/清空吧/确定清空"等答复后，才能以 confirm=true 再次调用并真正执行。',
       parameters: {
@@ -319,6 +345,63 @@ function clearAllTool(args) {
   return { ok: true, cleared, total };
 }
 
+/** 批量建档/入库：单次工具调用处理全部条目（内部限速，不再多轮往返） */
+async function bulkCreateTool(args) {
+  const items = Array.isArray(args.items) ? args.items.slice(0, 200) : [];
+  if (!items.length) return { ok: false, error: 'items 为空' };
+  let created = 0, added = 0, basicCreated = 0;
+  const failed = [];
+  for (const it of items) {
+    const code = String((it && it.lcsc_code) || '').toUpperCase().trim();
+    if (!/^C\d{4,}$/.test(code)) { failed.push('编号无效:' + code); continue; }
+    const qty = Math.max(0, Math.round(Number(it.qty) || 0));
+    const price = it.price != null && it.price !== '' ? Number(it.price) : null;
+    try {
+      const exist = db.findActiveByLcsc(code)[0];
+      if (exist) {
+        if (qty) db.adjustStock(exist.id, qty, '批量入库', 'ai');
+        if (price != null) db.updateMaterial(exist.id, { price, currency: 'CNY' });
+        added++;
+      } else {
+        let f = null;
+        try {
+          f = await lcscnet.fetchPartDetail(code, { cn: false }); // 批量场景跳过中文页抓取，提速
+          f.photo = await lcscnet.localizeLcscPhoto(f.photo, code);
+        } catch (netErr) {
+          f = null;
+        }
+        if (f) {
+          db.createMaterial({
+            ...f,
+            lcsc_code: code,
+            stock: qty,
+            price: price != null ? price : null,
+            currency: price != null ? 'CNY' : undefined,
+            source: 'ai'
+          });
+          created++;
+        } else {
+          // 立创暂时拉不到（限流/网络抖动）：先建基础档案保住数量，之后可 AI 补全
+          db.createMaterial({
+            lcsc_code: code,
+            name: '待补全 ' + code,
+            stock: qty,
+            price: price != null ? price : null,
+            currency: price != null ? 'CNY' : undefined,
+            remark: '立创资料暂未拉取，可对我说"补全资料"',
+            source: 'ai'
+          });
+          basicCreated++;
+        }
+      }
+    } catch (e) {
+      failed.push(code + ':' + e.message.slice(0, 40));
+    }
+    await new Promise((r) => setTimeout(r, 280));
+  }
+  return { ok: true, created, added, basicCreated, failedCount: failed.length, failed: failed.slice(0, 10) };
+}
+
 async function lcscLookupTool(args) {
   const code = String(args && args.code || '').trim();
   if (!/^C\d{4,}$/i.test(code)) return { ok: false, error: '请提供有效的 C 开头编号' };
@@ -412,6 +495,7 @@ async function runTool(name, rawArgs) {
     case 'search_material': return searchTool(args);
     case 'lcsc_lookup': return lcscLookupTool(args);
     case 'check_codes': return checkCodesTool(args);
+    case 'bulk_create_items': return bulkCreateTool(args);
     case 'create_material': return createTool(args);
     case 'adjust_stock': return adjustTool(args);
     case 'set_stock': return setTool(args);
@@ -446,6 +530,9 @@ function opFromTool(name, out) {
   }
   if (name === 'clear_all_materials') {
     return { op: 'clear_all', cleared: out.cleared };
+  }
+  if (name === 'bulk_create_items') {
+    return { op: 'bulk', created: (out.created || 0) + (out.basicCreated || 0), added: out.added || 0, failedCount: out.failedCount || 0 };
   }
   if (name === 'update_material') {
     const m = out.material || {};

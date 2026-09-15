@@ -129,9 +129,15 @@ function buildMaterialWhere({ q = '', category = '', lowOnly = false, status = '
   const where = ['deleted = 0'];
   const params = [];
   if (q && q.trim()) {
-    const like = `%${q.trim()}%`;
-    where.push('(name LIKE ? OR model LIKE ? OR lcsc_code LIKE ? OR brand LIKE ? OR spec LIKE ? OR description LIKE ? OR location LIKE ? OR category LIKE ?)');
-    params.push(like, like, like, like, like, like, like, like);
+    // 多关键词 AND：每个词都需命中任一字段
+    const tokens = q.trim().split(/\s+/).slice(0, 6);
+    const tokenConds = [];
+    for (const tk of tokens) {
+      const like = `%${tk}%`;
+      tokenConds.push('(name LIKE ? OR model LIKE ? OR lcsc_code LIKE ? OR brand LIKE ? OR spec LIKE ? OR description LIKE ? OR location LIKE ? OR category LIKE ?)');
+      params.push(like, like, like, like, like, like, like, like);
+    }
+    where.push('(' + tokenConds.join(' AND ') + ')');
   }
   if (category) { where.push('category = ?'); params.push(category); }
   if (lowOnly || status === 'low') { where.push('(min_stock > 0 AND stock <= min_stock)'); }
@@ -156,14 +162,82 @@ function buildMaterialWhere({ q = '', category = '', lowOnly = false, status = '
   return { whereSql: where.join(' AND '), params };
 }
 
+/** 编辑距离（带长度剪枝），用于模糊搜索兜底 */
+function levenshtein(a, b, max) {
+  if (Math.abs(a.length - b.length) > max) return max + 1;
+  const prev = new Array(b.length + 1);
+  const cur = new Array(b.length + 1);
+  for (let j = 0; j <= b.length; j++) prev[j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    cur[0] = i;
+    let rowMin = cur[0];
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost);
+      if (cur[j] < rowMin) rowMin = cur[j];
+    }
+    if (rowMin > max) return max + 1;
+    for (let j = 0; j <= b.length; j++) prev[j] = cur[j];
+  }
+  return prev[b.length];
+}
+
+const FIELDS_FOR_SEARCH = ['name', 'model', 'lcsc_code', 'brand', 'spec', 'location', 'category', 'description'];
+
+/** 单 token 对一行物料的模糊得分（0=不匹配） */
+function tokenScore(token, m) {
+  const t = token.toLowerCase();
+  let best = 0;
+  for (const f of FIELDS_FOR_SEARCH) {
+    const v = String(m[f] || '').toLowerCase();
+    if (!v) continue;
+    if (v === t) return 3;
+    if (v.includes(t)) best = Math.max(best, 2);
+    else if (v.startsWith(t)) best = Math.max(best, 1.8);
+    else if (t.length >= 5 && ['model', 'lcsc_code', 'brand'].includes(f)) {
+      // 错字容错：与字段同长前缀比对（如 stm32f013 ≈ stm32f103）
+      const pf = v.slice(0, t.length);
+      const d = levenshtein(pf, t, 2);
+      if (d <= 2) best = Math.max(best, 1.5 - d * 0.25);
+      // 短字段整体近似（品牌错字：yageo≈yagep）
+      if (v.length <= t.length + 2) {
+        const d2 = levenshtein(v, t, 2);
+        if (d2 <= 2) best = Math.max(best, 1.2 - d2 * 0.2);
+      }
+    }
+  }
+  return best;
+}
+
 export function listMaterials(opts = {}) {
   const d = openDb();
   const { page = 0, size = 200 } = opts;
-  const { whereSql, params } = buildMaterialWhere(opts);
-  const total = d.prepare(`SELECT COUNT(*) AS c FROM materials WHERE ${whereSql}`).get(...params).c;
-  const rows = d.prepare(
+  let { whereSql, params } = buildMaterialWhere(opts);
+  let rows = d.prepare(
     `SELECT ${LIST_FIELDS} FROM materials WHERE ${whereSql} ORDER BY updated_at DESC LIMIT ? OFFSET ?`
   ).all(...params, size, page * size);
+  let total = d.prepare(`SELECT COUNT(*) AS c FROM materials WHERE ${whereSql}`).get(...params).c;
+
+  // 模糊兜底：精确搜索无结果且带关键词时，保留其余筛选条件，对全库做模糊打分
+  const q = String(opts.q || '').trim();
+  if (!rows.length && q) {
+    const tokens = q.toLowerCase().split(/\s+/).filter(Boolean).slice(0, 6);
+    const base = buildMaterialWhere({ ...opts, q: '' });
+    const all = d.prepare(`SELECT ${LIST_FIELDS} FROM materials WHERE ${base.whereSql}`).all(...base.params).map(parseRow);
+    const scored = [];
+    for (const m of all) {
+      let score = 0;
+      for (const t of tokens) {
+        const s = tokenScore(t, m);
+        if (!s) { score = 0; break; }
+        score += s;
+      }
+      if (score >= tokens.length - 0.01) scored.push({ m, score });
+    }
+    scored.sort((a, b) => b.score - a.score);
+    rows = scored.slice(0, size).map((x) => x.m);
+    total = rows.length;
+  }
   return { rows: rows.map(parseRow).map(toApi), total };
 }
 

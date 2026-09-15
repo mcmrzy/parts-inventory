@@ -81,7 +81,8 @@ export class LcscNetError extends Error {}
  * 按立创编号(Cxxxx)查询物料资料
  * @returns 与 create_material 字段一致的对象（含 photo/lcsc_url/datasheet_url）
  */
-export async function fetchPartDetail(rawCode) {
+export async function fetchPartDetail(rawCode, opts = {}) {
+  const cnFetch = opts.cn !== false;
   const code = extractCode(rawCode);
   if (!code) throw new LcscNetError('无法识别立创编号，请输入 C 开头编号');
   const target = new URL(API_ENDPOINT.href);
@@ -106,8 +107,8 @@ export async function fetchPartDetail(rawCode) {
   }
   const fields = detailToFields(data.result);
   if (!fields || !fields.lcsc_code) throw new LcscNetError('该编号未查询到有效物料');
-  // 国内站增强：中文描述 + 人民币参考价（国际接口只有英文与美元）
-  if (fields.product_id) {
+  // 国内站增强：中文描述 + 人民币参考价（国际接口只有英文与美元）；cn:false 时跳过（批量场景提速）
+  if (fields.product_id && cnFetch) {
     try {
       const html = await fetchCnItemPage(fields.product_id);
       if (html) {
